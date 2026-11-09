@@ -1,0 +1,744 @@
+##########################################################################
+#                                                                        #
+#               CHapter I Primer comparison results                      #
+#                                                                        #
+##########################################################################
+
+
+
+####################################################### STEP I
+##################################### ASSIGN TAXONOMY 
+######################## USING SILVA V144
+
+library(dada2)
+library(phyloseq)
+library(BiocGenerics)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+
+
+####################################################
+#--------------------------------------------------#
+#            V3-V4 TAXONOMY ASSIGNMENT             #
+#--------------------------------------------------#
+####################################################
+
+# ------------------------------------------------------------------------------
+# STEP 1: LOAD DATA & RE-ASSIGN TAXONOMY
+# ------------------------------------------------------------------------------
+
+# 1. Load the merged, chimera-free ASV table
+V3V4.seqtab.nochim <- readRDS("/mnt/data/home/salvatorecampanile/primers attempt/V3-V4/V3-V4-seqtab.nochim.rds") 
+
+# 2. Load sample metadata safely (forcing the 1st column as row names)
+V3V4.metadata <- read.csv("/mnt/data/home/salvatorecampanile/primers attempt/V3-V4/V3-V4 metadata.csv", header = TRUE, stringsAsFactors = FALSE)
+rownames(V3V4.metadata) <- trimws(V3V4.metadata[, 1])
+
+# 3. Run taxonomic assignment with 8 ranks
+V3V4.taxonomy <- assignTaxonomy(
+  V3V4.seqtab.nochim,
+  "/mnt/data/home/salvatorecampanile/Paper 1 final results and plots/paper 1 results/silva_nr99_v144_toSpecies_trainset.fa.gz",
+  multithread = TRUE,
+  tryRC = TRUE,
+  taxLevels = c("Domain", "Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+)
+
+cat("Total ASVs in sequence table:", ncol(V3V4.seqtab.nochim), "\n") #check content of each
+cat("Total ASVs in taxonomy table:", nrow(V3V4.taxonomy), "\n") 
+cat("Total metadata samples loaded:", nrow(V3V4.metadata), "\n")
+
+# 4. Combine your tables into a single phyloseq object
+V3V4.ps <- phyloseq(
+  otu_table(V3V4.seqtab.nochim, taxa_are_rows = FALSE),
+  tax_table(V3V4.taxonomy),
+  sample_data(V3V4.metadata)
+)
+
+# ---------------------------------------------------------------------
+# STEP 2: CONTAMINANT REMOVAL USING DECONTAM (PREVALENCE METHOD)
+# ---------------------------------------------------------------------
+
+# Identify actual extraction blanks in the phyloseq object
+sample_data(V3V4.ps)$is.neg <-
+  grepl("NEG-V3V4", sample_names(V3V4.ps))
+
+cat("\nNegative controls identified:\n")
+print(table(sample_data(V3V4.ps)$is.neg))
+
+cat("\nNegative control samples:\n")
+print(sample_names(V3V4.ps)[sample_data(V3V4.ps)$is.neg])
+
+# 2. Identify contaminants using prevalence method
+V3V4.contam.df <- isContaminant(
+  V3V4.ps,
+  method = "prevalence",
+  neg = "is.neg"
+)
+
+cat("\n--- DECONTAM RESULTS ---\n")
+cat("Number of contaminant ASVs:", sum(V3V4.contam.df$contaminant), "\n")
+cat("Number of non-contaminant ASVs:", sum(!V3V4.contam.df$contaminant), "\n")
+
+# 3. Remove contaminants and blanks if present
+V3V4_clean <- prune_taxa(!V3V4.contam.df$contaminant, V3V4.ps)
+V3V4_clean <- prune_samples(!sample_data(V3V4_clean)$is.neg, V3V4_clean)
+
+
+# 6. Save cleaned dataset
+setwd("/mnt/data/home/salvatorecampanile/chapter I: primers comparison for chloroplast contamination")
+saveRDS(V3V4_clean, file = "V3V4_no_contaminants.rds")
+
+
+
+
+
+
+####################################################
+#--------------------------------------------------#
+#            V4-bis TAXONOMY ASSIGNMENT            #
+#--------------------------------------------------#
+####################################################
+
+
+# ------------------------------------------------------------------------------
+# STEP 1: LOAD DATA & RE-ASSIGN TAXONOMY
+# ------------------------------------------------------------------------------
+
+# 1. Load the merged, chimera-free ASV table
+V4b.seqtab.nochim <- readRDS("/mnt/data/home/salvatorecampanile/primers attempt/V4/V4b.seqtab.nochim.rds") 
+
+# 2. Load sample metadata safely (forcing the 1st column as row names)
+V4b.metadata <- read.csv("/mnt/data/home/salvatorecampanile/primers attempt/V4/V4 metadata b.csv", header = TRUE, stringsAsFactors = FALSE)
+rownames(V4b.metadata) <- trimws(V4b.metadata[, 1])
+
+# 3. Run taxonomic assignment with 8 ranks
+V4b.taxonomy <- assignTaxonomy(
+  V4b.seqtab.nochim,
+  "/mnt/data/home/salvatorecampanile/Paper 1 final results and plots/paper 1 results/silva_nr99_v144_toSpecies_trainset.fa.gz",
+  multithread = TRUE,
+  tryRC = TRUE,
+  taxLevels = c("Domain", "Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+)
+
+cat("Total ASVs in sequence table:", ncol(V4b.seqtab.nochim), "\n") #check content of each
+cat("Total ASVs in taxonomy table:", nrow(V4b.taxonomy), "\n")
+cat("Total metadata samples loaded:", nrow(V4b.metadata), "\n")
+
+# 4. Combine your tables into a single phyloseq object
+V4b.ps <- phyloseq(
+  otu_table(V4b.seqtab.nochim, taxa_are_rows = FALSE),
+  tax_table(V4b.taxonomy),
+  sample_data(V4b.metadata)
+)
+
+# ---------------------------------------------------------------------
+# STEP 2: CONTAMINANT REMOVAL USING DECONTAM (PREVALENCE METHOD)
+# ---------------------------------------------------------------------
+
+# Identify actual extraction blanks in the phyloseq object
+sample_data(V4b.ps)$is.neg <-
+  grepl("NEG-V4", sample_names(V4b.ps))
+
+cat("\nNegative controls identified:\n")
+print(table(sample_data(V4b.ps)$is.neg))
+
+cat("\nNegative control samples:\n")
+print(sample_names(V4b.ps)[sample_data(V4b.ps)$is.neg])
+
+# 2. Identify contaminants using prevalence method
+V4b.contam.df <- isContaminant(
+  V4b.ps,
+  method = "prevalence",
+  neg = "is.neg"
+)
+
+cat("\n--- DECONTAM RESULTS ---\n")
+cat("Number of contaminant ASVs:", sum(V4b.contam.df$contaminant), "\n")
+cat("Number of non-contaminant ASVs:", sum(!V4b.contam.df$contaminant), "\n")
+
+# 3. Remove contaminants and blanks if present
+V4b_clean <- prune_taxa(!V4b.contam.df$contaminant, V4b.ps)
+V4b_clean <- prune_samples(!sample_data(V4b_clean)$is.neg, V4b_clean)
+
+
+# 6. Save cleaned dataset
+setwd("/mnt/data/home/salvatorecampanile/chapter I: primers comparison for chloroplast contamination")
+saveRDS(V4b_clean, file = "V4b_no_contaminants.rds")
+
+# 1. Define the exact names of the samples you want to remove
+samples_to_remove <- c("Sample_Name_1", "Sample_Name_2", "Sample_Name_3")
+
+# 2. Prune them out (keeping only samples NOT in your remove list)
+V4b.ps <- prune_samples(!(sample_names(V4b.ps) %in% samples_to_remove), V4b.ps)
+
+# bonus1. Define the exact names of the samples you want to remove
+samples_to_remove <- c("BLANK-13b-LJD22346", "C14-L5b-LJD22344", "C23-L3b-LJD22345")
+
+# bonus2. Prune them out (keeping only samples NOT in your remove list)
+V4b_clean <- prune_samples(!(sample_names(V4b_clean) %in% samples_to_remove), V4b_clean)
+
+#####################################################
+#---------------------------------------------------#
+#            V4-V5  TAXONOMY ASSIGNMENT             #
+#---------------------------------------------------#
+#####################################################
+
+
+# ------------------------------------------------------------------------------
+# STEP 1: LOAD DATA & RE-ASSIGN TAXONOMY
+# ------------------------------------------------------------------------------
+
+# 1. Load the merged, chimera-free ASV table
+V4V5.seqtab.nochim <- readRDS("/mnt/data/home/salvatorecampanile/primers attempt/V4-V5/V4-V5_seqtab.nochim.rds") 
+
+# 2. Load sample metadata safely (forcing the 1st column as row names)
+V4V5.metadata <- read.csv("/mnt/data/home/salvatorecampanile/primers attempt/V4-V5/V4-V5 metadata -.csv", header = TRUE, stringsAsFactors = FALSE)
+rownames(V4V5.metadata) <- trimws(V4V5.metadata[, 1])
+
+# 3. Run taxonomic assignment with 8 ranks
+V4V5.taxonomy <- assignTaxonomy(
+  V4V5.seqtab.nochim,
+  "/mnt/data/home/salvatorecampanile/Paper 1 final results and plots/paper 1 results/silva_nr99_v144_toSpecies_trainset.fa.gz",
+  multithread = TRUE,
+  tryRC = TRUE,
+  taxLevels = c("Domain", "Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+)
+
+cat("Total ASVs in sequence table:", ncol(V4V5.seqtab.nochim), "\n") #check content of each
+cat("Total ASVs in taxonomy table:", nrow(V4V5.taxonomy), "\n")
+cat("Total metadata samples loaded:", nrow(V4V5.metadata), "\n")
+
+
+# 4. Combine your tables into a single phyloseq object
+V4V5.ps <- phyloseq(
+  otu_table(V4V5.seqtab.nochim, taxa_are_rows = FALSE),
+  tax_table(V4V5.taxonomy),
+  sample_data(V4V5.metadata)
+)
+
+# ---------------------------------------------------------------------
+# STEP 2: CONTAMINANT REMOVAL USING DECONTAM (PREVALENCE METHOD)
+# ---------------------------------------------------------------------
+
+# Identify actual extraction blanks in the phyloseq object
+sample_data(V4V5.ps)$is.neg <-
+  grepl("NEG-V4V5", sample_names(V4V5.ps))
+
+cat("\nNegative controls identified:\n")
+print(table(sample_data(V4V5.ps)$is.neg))
+
+cat("\nNegative control samples:\n")
+print(sample_names(V4V5.ps)[sample_data(V4V5.ps)$is.neg])
+
+# 2. Identify contaminants using prevalence method
+V4V5.contam.df <- isContaminant(
+  V4V5.ps,
+  method = "prevalence",
+  neg = "is.neg"
+)
+
+cat("\n--- DECONTAM RESULTS ---\n")
+cat("Number of contaminant ASVs:", sum(V4V5.contam.df$contaminant), "\n")
+cat("Number of non-contaminant ASVs:", sum(!V4V5.contam.df$contaminant), "\n")
+
+# 3. Remove contaminants and blanks if present
+V4V5_clean <- prune_taxa(!V4V5.contam.df$contaminant, V4V5.ps)
+V4V5_clean <- prune_samples(!sample_data(V4V5_clean)$is.neg, V4V5_clean)
+
+
+# 6. Save cleaned dataset
+setwd("/mnt/data/home/salvatorecampanile/chapter I: primers comparison for chloroplast contamination")
+saveRDS(V4V5_clean, file = "V4V5_no_contaminants.rds")
+
+
+
+# ==============================================================================
+# EXPORT SUPPLEMENTARY TABLE OF CONTAMINANT ASVs
+# ==============================================================================
+
+tax_df <- as.data.frame(tax_table(dataset_final))
+tax_df$ASV <- rownames(tax_df)
+active_ranks <- rank_names(dataset_final)
+
+contam_export <- cbind(
+  ASV = taxa_names(dataset_final),
+  contam.df,
+  tax_df[taxa_names(dataset_final), active_ranks, drop = FALSE]
+)
+
+contam_export <- contam_export[contam_export$contaminant == TRUE, ]
+contam_export$Total_Reads <- taxa_sums(dataset_final)[contam_export$ASV]
+contam_export$Sample_Prevalence <- apply(
+  otu_table(dataset_final)[, contam_export$ASV, drop = FALSE], 
+  2, 
+  function(x) sum(x > 0)
+)
+
+col_order <- c("ASV", active_ranks, "p.val", "Total_Reads", "Sample_Prevalence")
+contam_export <- contam_export[, intersect(col_order, colnames(contam_export))]
+
+write.csv(contam_export, "Supplementary_Table_Contaminants_With_Taxonomy.csv", row.names = FALSE)
+cat("Successfully exported contaminant ASVs!\n")
+
+
+
+
+
+################################################# STEP II
+################################### barplot comparison
+######################## Chloroplast chart
+
+
+# --- 1. LOAD THE THREE DATASETS ---
+# Update these paths to match where your files are located
+V3V4.ps <- readRDS("/mnt/data/home/salvatorecampanile/chapter I: primers comparison for chloroplast contamination/V3V4_no_contaminants.rds")
+V4b.ps   <- readRDS("/mnt/data/home/salvatorecampanile/chapter I: primers comparison for chloroplast contamination/V4b_no_contaminants.rds")
+V4V5.ps <- readRDS("/mnt/data/home/salvatorecampanile/chapter I: primers comparison for chloroplast contamination/V4V5_no_contaminants.rds")
+
+# Helper function to safely sum reads for a category (prevents crashes if a category has 0 ASVs)
+get_category_percentage <- function(otu_mat, tax_df, cat_name, total_reads) {
+  matching_cols <- which(tax_df$Category == cat_name)
+  if (length(matching_cols) == 0) {
+    return(rep(0, nrow(otu_mat)))
+  }
+  sub_mat <- otu_mat[, matching_cols, drop = FALSE]
+  100 * base::rowSums(sub_mat, na.rm = TRUE) / total_reads
+}
+
+
+# --- 2. PROCESS DATASET 1: V3V4 ---
+otu_v3v4 <- as.matrix(otu_table(V3V4.ps))
+if (taxa_are_rows(V3V4.ps)) { otu_v3v4 <- t(otu_v3v4) }
+tax_v3v4 <- as.data.frame(tax_table(V3V4.ps))
+tax_v3v4$ASV <- rownames(tax_v3v4)
+tax_v3v4 <- tax_v3v4[match(colnames(otu_v3v4), tax_v3v4$ASV), ]
+
+cat_v3v4 <- rep("Other", nrow(tax_v3v4))
+cat_v3v4[apply(tax_v3v4, 1, function(x) any(grepl("Eukaryota", x, ignore.case = TRUE)))] <- "Eukaryota"
+cat_v3v4[apply(tax_v3v4, 1, function(x) any(grepl("Chloroplast", x, ignore.case = TRUE)))] <- "Chloroplast"
+cat_v3v4[apply(tax_v3v4, 1, function(x) any(grepl("Mitochondria", x, ignore.case = TRUE)))] <- "Mitochondria"
+cat_v3v4[(tax_v3v4$Domain %in% c("Bacteria", "Archaea")) & cat_v3v4 == "Other"] <- "Prokaryotes"
+tax_v3v4$Category <- cat_v3v4
+
+tot_v3v4 <- rowSums(otu_v3v4); tot_v3v4[tot_v3v4 == 0] <- 1
+df_v3v4 <- data.frame(
+  Sample = rownames(otu_v3v4),
+  Prokaryotes  = 100 * rowSums(otu_v3v4[, tax_v3v4$Category == "Prokaryotes", drop = FALSE]) / tot_v3v4,
+  Eukaryota    = 100 * rowSums(otu_v3v4[, tax_v3v4$Category == "Eukaryota", drop = FALSE]) / tot_v3v4,
+  Chloroplast  = 100 * rowSums(otu_v3v4[, tax_v3v4$Category == "Chloroplast", drop = FALSE]) / tot_v3v4,
+  Mitochondria = 100 * rowSums(otu_v3v4[, tax_v3v4$Category == "Mitochondria", drop = FALSE]) / tot_v3v4,
+  Region = "V3-V4 region",
+  stringsAsFactors = FALSE
+)
+
+
+# --- 3. PROCESS DATASET 2: V4b ---
+otu_v4b <- as.matrix(otu_table(V4b.ps))
+if (taxa_are_rows(V4b.ps)) { otu_v4b <- t(otu_v4b) }
+tax_v4b <- as.data.frame(tax_table(V4b.ps))
+tax_v4b$ASV <- rownames(tax_v4b)
+tax_v4b <- tax_v4b[match(colnames(otu_v4b), tax_v4b$ASV), ]
+
+cat_v4b <- rep("Other", nrow(tax_v4b))
+cat_v4b[apply(tax_v4b, 1, function(x) any(grepl("Eukaryota", x, ignore.case = TRUE)))] <- "Eukaryota"
+cat_v4b[apply(tax_v4b, 1, function(x) any(grepl("Chloroplast", x, ignore.case = TRUE)))] <- "Chloroplast"
+cat_v4b[apply(tax_v4b, 1, function(x) any(grepl("Mitochondria", x, ignore.case = TRUE)))] <- "Mitochondria"
+cat_v4b[(tax_v4b$Domain %in% c("Bacteria", "Archaea")) & cat_v4b == "Other"] <- "Prokaryotes"
+tax_v4b$Category <- cat_v4b
+
+tot_v4b <- base::rowSums(otu_v4b, na.rm = TRUE); tot_v4b[tot_v4b == 0] <- 1
+
+df_v4b <- data.frame(
+  Sample       = rownames(otu_v4b),
+  Prokaryotes  = get_category_percentage(otu_v4b, tax_v4b, "Prokaryotes", tot_v4b),
+  Eukaryota    = get_category_percentage(otu_v4b, tax_v4b, "Eukaryota", tot_v4b),
+  Chloroplast  = get_category_percentage(otu_v4b, tax_v4b, "Chloroplast", tot_v4b),
+  Mitochondria = get_category_percentage(otu_v4b, tax_v4b, "Mitochondria", tot_v4b),
+  Region       = "V4 region",
+  stringsAsFactors = FALSE
+)
+
+# --- 4. PROCESS DATASET 3: V4V5 ---
+otu_v4v5 <- as.matrix(otu_table(V4V5.ps))
+if (taxa_are_rows(V4V5.ps)) { otu_v4v5 <- t(otu_v4v5) }
+tax_v4v5 <- as.data.frame(tax_table(V4V5.ps))
+tax_v4v5$ASV <- rownames(tax_v4v5)
+tax_v4v5 <- tax_v4v5[match(colnames(otu_v4v5), tax_v4v5$ASV), ]
+
+cat_v4v5 <- rep("Other", nrow(tax_v4v5))
+cat_v4v5[apply(tax_v4v5, 1, function(x) any(grepl("Eukaryota", x, ignore.case = TRUE)))] <- "Eukaryota"
+cat_v4v5[apply(tax_v4v5, 1, function(x) any(grepl("Chloroplast", x, ignore.case = TRUE)))] <- "Chloroplast"
+cat_v4v5[apply(tax_v4v5, 1, function(x) any(grepl("Mitochondria", x, ignore.case = TRUE)))] <- "Mitochondria"
+cat_v4v5[(tax_v4v5$Domain %in% c("Bacteria", "Archaea")) & cat_v4v5 == "Other"] <- "Prokaryotes"
+tax_v4v5$Category <- cat_v4v5
+
+tot_v4v5 <- rowSums(otu_v4v5); tot_v4v5[tot_v4v5 == 0] <- 1
+df_v4v5 <- data.frame(
+  Sample = rownames(otu_v4v5),
+  Prokaryotes  = 100 * rowSums(otu_v4v5[, tax_v4v5$Category == "Prokaryotes", drop = FALSE]) / tot_v4v5,
+  Eukaryota    = 100 * rowSums(otu_v4v5[, tax_v4v5$Category == "Eukaryota", drop = FALSE]) / tot_v4v5,
+  Chloroplast  = 100 * rowSums(otu_v4v5[, tax_v4v5$Category == "Chloroplast", drop = FALSE]) / tot_v4v5,
+  Mitochondria = 100 * rowSums(otu_v4v5[, tax_v4v5$Category == "Mitochondria", drop = FALSE]) / tot_v4v5,
+  Region = "V4-V5 region",
+  stringsAsFactors = FALSE
+)
+
+# --- 5. COMBINE AND PLOT ---
+combined_data <- bind_rows(df_v3v4, df_v4b, df_v4v5)
+
+plot_data <- combined_data %>%
+  pivot_longer(
+    cols = c(Prokaryotes, Eukaryota, Chloroplast, Mitochondria),
+    names_to = "Category", 
+    values_to = "Percentage"
+  )
+
+plot_data$Category <- factor(plot_data$Category, levels = c("Prokaryotes", "Eukaryota", "Chloroplast", "Mitochondria"))
+plot_data$Region <- factor(plot_data$Region, levels = c("V3-V4 region", "V4 region", "V4-V5 region"))
+
+p <- ggplot(plot_data, aes(x = Sample, y = Percentage, fill = Category)) +
+  geom_col(width = 0.8) +
+  facet_grid(~ Region, scales = "free_x", space = "free_x") +
+  coord_cartesian(ylim = c(0, 100)) +
+  scale_y_continuous(breaks = seq(0, 100, 10), expand = c(0, 0)) +
+  scale_fill_manual(values = c(
+    "Prokaryotes" = "#2166AC", 
+    "Eukaryota" = "#F4A582", 
+    "Chloroplast" = "#66BD63", 
+    "Mitochondria" = "#9E9AC8"
+  )) +
+  labs(x = NULL, y = "Percentage of total reads", fill = NULL) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 8),
+    strip.background = element_rect(fill = "grey90", colour = NA),
+    strip.text = element_text(face = "bold", size = 14),
+    legend.position = "bottom",
+    legend.text = element_text(size = 12),
+    legend.key.size = unit(0.8, "cm")
+  )
+
+print(p)
+
+### NOW SAME PLOT BUT WITH LABELS
+
+# --- 5. COMBINE AND PLOT ---
+combined_data <- bind_rows(df_v3v4, df_v4b, df_v4v5)
+
+plot_data <- combined_data %>%
+  pivot_longer(
+    cols = c(Prokaryotes, Eukaryota, Chloroplast, Mitochondria),
+    names_to = "Category", 
+    values_to = "Percentage"
+  )
+
+plot_data$Category <- factor(plot_data$Category, levels = c("Prokaryotes", "Eukaryota", "Chloroplast", "Mitochondria"))
+plot_data$Region <- factor(plot_data$Region, levels = c("V3-V4 region", "V4 region", "V4-V5 region"))
+
+# Pre-calculate precise stacking midpoints on the full dataset before filtering
+plot_data <- plot_data %>%
+  arrange(Region, Sample, desc(Category)) %>% # Ensures correct vertical stacking order
+  group_by(Region, Sample) %>%
+  mutate(
+    ymax = cumsum(Percentage),
+    ymin = ymax - Percentage,
+    y_pos = (ymin + ymax) / 2
+  ) %>%
+  ungroup()
+
+# Filter for just Chloroplast and Prokaryotes for labeling (adjust threshold if needed)
+label_data <- plot_data %>%
+  filter(Category %in% c("Chloroplast", "Prokaryotes") & Percentage >= 5)
+
+p_labels <- ggplot(plot_data, aes(x = Sample, y = Percentage, fill = Category)) +
+  geom_col(width = 0.8) +
+  geom_text(
+    data = label_data,
+    aes(y = y_pos, label = paste0(round(Percentage, 1), "%")),
+    size = 2.5,
+    color = "black",
+    fontface = "bold"
+  ) +
+  facet_grid(~ Region, scales = "free_x", space = "free_x") +
+  coord_cartesian(ylim = c(0, 100)) +
+  scale_y_continuous(breaks = seq(0, 100, 10), expand = c(0, 0)) +
+  scale_fill_manual(values = c(
+    "Prokaryotes" = "#2166AC", 
+    "Eukaryota" = "#F4A582", 
+    "Chloroplast" = "#66BD63", 
+    "Mitochondria" = "#9E9AC8"
+  )) +
+  labs(x = NULL, y = "Percentage of total reads", fill = NULL) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 8),
+    strip.background = element_rect(fill = "grey90", colour = NA),
+    strip.text = element_text(face = "bold", size = 14),
+    legend.position = "bottom",
+    legend.text = element_text(size = 12),
+    legend.key.size = unit(0.8, "cm")
+  )
+
+print(p_labels)
+
+
+
+################################################# STEP III
+################################### barplot comparison absolute number of reads
+######################## Chloroplast chart
+
+# 1. Load your three clean phyloseq objects
+V3V4.ps <- readRDS("/mnt/data/home/salvatorecampanile/chapter I: primers comparison for chloroplast contamination/V3V4_no_contaminants.rds")
+V4b.ps  <- readRDS("/mnt/data/home/salvatorecampanile/chapter I: primers comparison for chloroplast contamination/V4b_no_contaminants.rds")
+V4V5.ps <- readRDS("/mnt/data/home/salvatorecampanile/chapter I: primers comparison for chloroplast contamination/V4V5_no_contaminants.rds")
+
+# Helper function to safely get absolute read sums for a category
+get_category_reads <- function(otu_mat, tax_df, cat_name) {
+  matching_cols <- which(tax_df$Category == cat_name)
+  if (length(matching_cols) == 0) {
+    return(rep(0, nrow(otu_mat)))
+  }
+  sub_mat <- otu_mat[, matching_cols, drop = FALSE]
+  base::rowSums(sub_mat, na.rm = TRUE)
+}
+
+
+# --- 2. PROCESS DATASET 1: V3V4 ---
+otu_v3v4 <- as.matrix(otu_table(V3V4.ps))
+if (taxa_are_rows(V3V4.ps)) { otu_v3v4 <- t(otu_v3v4) }
+tax_v3v4 <- as.data.frame(tax_table(V3V4.ps))
+tax_v3v4$ASV <- rownames(tax_v3v4)
+tax_v3v4 <- tax_v3v4[match(colnames(otu_v3v4), tax_v3v4$ASV), ]
+
+cat_v3v4 <- rep("Other", nrow(tax_v3v4))
+cat_v3v4[apply(tax_v3v4, 1, function(x) any(grepl("Eukaryota", x, ignore.case = TRUE)))] <- "Eukaryota"
+cat_v3v4[apply(tax_v3v4, 1, function(x) any(grepl("Chloroplast", x, ignore.case = TRUE)))] <- "Chloroplast"
+cat_v3v4[apply(tax_v3v4, 1, function(x) any(grepl("Mitochondria", x, ignore.case = TRUE)))] <- "Mitochondria"
+cat_v3v4[(tax_v3v4$Domain %in% c("Bacteria", "Archaea")) & cat_v3v4 == "Other"] <- "Prokaryotes"
+tax_v3v4$Category <- cat_v3v4
+
+df_v3v4 <- data.frame(
+  Sample       = rownames(otu_v3v4),
+  Prokaryotes  = get_category_reads(otu_v3v4, tax_v3v4, "Prokaryotes"),
+  Eukaryota    = get_category_reads(otu_v3v4, tax_v3v4, "Eukaryota"),
+  Chloroplast  = get_category_reads(otu_v3v4, tax_v3v4, "Chloroplast"),
+  Mitochondria = get_category_reads(otu_v3v4, tax_v3v4, "Mitochondria"),
+  Region       = "V3-V4 region",
+  stringsAsFactors = FALSE
+)
+
+
+# --- 3. PROCESS DATASET 2: V4b ---
+otu_v4b <- as.matrix(otu_table(V4b.ps))
+if (taxa_are_rows(V4b.ps)) { otu_v4b <- t(otu_v4b) }
+tax_v4b <- as.data.frame(tax_table(V4b.ps))
+tax_v4b$ASV <- rownames(tax_v4b)
+tax_v4b <- tax_v4b[match(colnames(otu_v4b), tax_v4b$ASV), ]
+
+cat_v4b <- rep("Other", nrow(tax_v4b))
+cat_v4b[apply(tax_v4b, 1, function(x) any(grepl("Eukaryota", x, ignore.case = TRUE)))] <- "Eukaryota"
+cat_v4b[apply(tax_v4b, 1, function(x) any(grepl("Chloroplast", x, ignore.case = TRUE)))] <- "Chloroplast"
+cat_v4b[apply(tax_v4b, 1, function(x) any(grepl("Mitochondria", x, ignore.case = TRUE)))] <- "Mitochondria"
+cat_v4b[(tax_v4b$Domain %in% c("Bacteria", "Archaea")) & cat_v4b == "Other"] <- "Prokaryotes"
+tax_v4b$Category <- cat_v4b
+
+df_v4b <- data.frame(
+  Sample       = rownames(otu_v4b),
+  Prokaryotes  = get_category_reads(otu_v4b, tax_v4b, "Prokaryotes"),
+  Eukaryota    = get_category_reads(otu_v4b, tax_v4b, "Eukaryota"),
+  Chloroplast  = get_category_reads(otu_v4b, tax_v4b, "Chloroplast"),
+  Mitochondria = get_category_reads(otu_v4b, tax_v4b, "Mitochondria"),
+  Region       = "V4 region",
+  stringsAsFactors = FALSE
+)
+
+
+# --- 4. PROCESS DATASET 3: V4V5 ---
+otu_v4v5 <- as.matrix(otu_table(V4V5.ps))
+if (taxa_are_rows(V4V5.ps)) { otu_v4v5 <- t(otu_v4v5) }
+tax_v4v5 <- as.data.frame(tax_table(V4V5.ps))
+tax_v4v5$ASV <- rownames(tax_v4v5)
+tax_v4v5 <- tax_v4v5[match(colnames(otu_v4v5), tax_v4v5$ASV), ]
+
+cat_v4v5 <- rep("Other", nrow(tax_v4v5))
+cat_v4v5[apply(tax_v4v5, 1, function(x) any(grepl("Eukaryota", x, ignore.case = TRUE)))] <- "Eukaryota"
+cat_v4v5[apply(tax_v4v5, 1, function(x) any(grepl("Chloroplast", x, ignore.case = TRUE)))] <- "Chloroplast"
+cat_v4v5[apply(tax_v4v5, 1, function(x) any(grepl("Mitochondria", x, ignore.case = TRUE)))] <- "Mitochondria"
+cat_v4v5[(tax_v4v5$Domain %in% c("Bacteria", "Archaea")) & cat_v4v5 == "Other"] <- "Prokaryotes"
+tax_v4v5$Category <- cat_v4v5
+
+df_v4v5 <- data.frame(
+  Sample       = rownames(otu_v4v5),
+  Prokaryotes  = get_category_reads(otu_v4v5, tax_v4v5, "Prokaryotes"),
+  Eukaryota    = get_category_reads(otu_v4v5, tax_v4v5, "Eukaryota"),
+  Chloroplast  = get_category_reads(otu_v4v5, tax_v4v5, "Chloroplast"),
+  Mitochondria = get_category_reads(otu_v4v5, tax_v4v5, "Mitochondria"),
+  Region       = "V4-V5 region",
+  stringsAsFactors = FALSE
+)
+
+
+# --- 5. COMBINE AND PLOT ---
+combined_data <- bind_rows(df_v3v4, df_v4b, df_v4v5)
+
+plot_data <- combined_data %>%
+  pivot_longer(
+    cols = c(Prokaryotes, Eukaryota, Chloroplast, Mitochondria),
+    names_to = "Category", 
+    values_to = "ReadCount"
+  )
+
+plot_data$Category <- factor(plot_data$Category, levels = c("Prokaryotes", "Eukaryota", "Chloroplast", "Mitochondria"))
+plot_data$Region <- factor(plot_data$Region, levels = c("V3-V4 region", "V4 region", "V4-V5 region"))
+
+# Pre-calculate precise stacking midpoints for absolute read counts
+plot_data <- plot_data %>%
+  arrange(Region, Sample, desc(Category)) %>%
+  group_by(Region, Sample) %>%
+  mutate(
+    ymax = cumsum(ReadCount),
+    ymin = ymax - ReadCount,
+    y_pos = (ymin + ymax) / 2
+  ) %>%
+  ungroup()
+
+# Filter for labeling Chloroplast and Prokaryotes (adjust read threshold if needed)
+label_data <- plot_data %>%
+  filter(Category %in% c("Chloroplast", "Prokaryotes") & ReadCount > 0)
+
+p_absolute_reads <- ggplot(plot_data, aes(x = Sample, y = ReadCount, fill = Category)) +
+  geom_col(width = 0.8) +
+  geom_text(
+    data = label_data,
+    aes(y = y_pos, label = scales::comma(ReadCount)),
+    size = 2.5,
+    color = "black",
+    fontface = "bold"
+  ) +
+  facet_grid(~ Region, scales = "free_x", space = "free_x") +
+  scale_y_continuous(labels = scales::comma, expand = c(0, 0), limits = c(0, NA)) +
+  scale_fill_manual(values = c(
+    "Prokaryotes" = "#2166AC", 
+    "Eukaryota" = "#F4A582", 
+    "Chloroplast" = "#66BD63", 
+    "Mitochondria" = "#9E9AC8"
+  )) +
+  labs(x = NULL, y = "Absolute number of reads", fill = NULL) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 8),
+    strip.background = element_rect(fill = "grey90", colour = NA),
+    strip.text = element_text(face = "bold", size = 14),
+    legend.position = "bottom",
+    legend.text = element_text(size = 12),
+    legend.key.size = unit(0.8, "cm")
+  )
+
+print(p_absolute_reads)
+
+
+
+
+
+
+
+library(phyloseq)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggalluvial)
+
+# 1. Load your three clean phyloseq objects
+V3V4.ps <- readRDS("/mnt/data/home/salvatorecampanile/chapter I: primers comparison for chloroplast contamination/V3V4_no_contaminants.rds")
+V4b.ps  <- readRDS("/mnt/data/home/salvatorecampanile/chapter I: primers comparison for chloroplast contamination/V4b_no_contaminants.rds")
+V4V5.ps <- readRDS("/mnt/data/home/salvatorecampanile/chapter I: primers comparison for chloroplast contamination/V4V5_no_contaminants.rds")
+
+# Helper function to safely get absolute read sums for a category
+get_category_reads <- function(otu_mat, tax_df, cat_name) {
+  matching_cols <- which(tax_df$Category == cat_name)
+  if (length(matching_cols) == 0) {
+    return(rep(0, nrow(otu_mat)))
+  }
+  sub_mat <- otu_mat[, matching_cols, drop = FALSE]
+  base::rowSums(sub_mat, na.rm = TRUE)
+}
+
+# Function to process each phyloseq object and extract a unified BioSample key
+process_ps <- function(ps_obj, region_name) {
+  otu <- as.matrix(otu_table(ps_obj))
+  if (taxa_are_rows(ps_obj)) { otu <- t(otu) }
+  tax <- as.data.frame(tax_table(ps_obj))
+  tax$ASV <- rownames(tax)
+  tax <- tax[match(colnames(otu), tax$ASV), ]
+  
+  cat <- rep("Other", nrow(tax))
+  cat[apply(tax, 1, function(x) any(grepl("Eukaryota", x, ignore.case = TRUE)))] <- "Eukaryota"
+  cat[apply(tax, 1, function(x) any(grepl("Chloroplast", x, ignore.case = TRUE)))] <- "Chloroplast"
+  cat[apply(tax, 1, function(x) any(grepl("Mitochondria", x, ignore.case = TRUE)))] <- "Mitochondria"
+  cat[(tax$Domain %in% c("Bacteria", "Archaea")) & cat == "Other"] <- "Prokaryotes"
+  tax$Category <- cat
+  
+  df <- data.frame(
+    Sample       = rownames(otu),
+    Prokaryotes  = get_category_reads(otu, tax, "Prokaryotes"),
+    Eukaryota    = get_category_reads(otu, tax, "Eukaryota"),
+    Chloroplast  = get_category_reads(otu, tax, "Chloroplast"),
+    Mitochondria = get_category_reads(otu, tax, "Mitochondria"),
+    Region       = region_name,
+    stringsAsFactors = FALSE
+  )
+  
+  clean_names <- sub("-(.*)$", "", df$Sample)
+  df$BioSample <- gsub("V4V5|V3V4|V4", "", clean_names)
+  
+  return(df)
+}
+
+# --- 2. PROCESS ALL THREE DATASETS ---
+df_v3v4 <- process_ps(V3V4.ps, "V3-V4 region")
+df_v4b  <- process_ps(V4b.ps,  "V4 region")
+df_v4v5 <- process_ps(V4V5.ps, "V4-V5 region")
+
+# --- 3. COMBINE, PIVOT, AND COMPLETE GRID FOR ALLUVIALS ---
+combined_data <- bind_rows(df_v3v4, df_v4b, df_v4v5)
+
+plot_data <- combined_data %>%
+  pivot_longer(
+    cols = c(Prokaryotes, Eukaryota, Chloroplast, Mitochondria),
+    names_to = "Category", 
+    values_to = "ReadCount"
+  )
+
+# Ensure every BioSample has every Region and Category represented
+plot_data <- plot_data %>%
+  complete(BioSample, Region, Category, fill = list(ReadCount = 0))
+
+plot_data$Category <- factor(plot_data$Category, levels = c("Prokaryotes", "Eukaryota", "Chloroplast", "Mitochondria"))
+plot_data$Region <- factor(plot_data$Region, levels = c("V3-V4 region", "V4 region", "V4-V5 region"))
+
+# --- 4. BUILD HORIZONTAL CONNECTED ALLUVIAL PLOT ---
+p_alluvial_combined <- ggplot(plot_data, aes(x = Region, y = ReadCount, stratum = Category, alluvium = interaction(BioSample, Category), fill = Category)) +
+  geom_flow(alpha = 0.2, color = NA) +          # Light, transparent streams connecting categories
+  geom_stratum(width = 0.6, color = "black") +  # Solid stacked absolute abundance bars at each region
+  facet_wrap(~ BioSample, scales = "free_x", ncol = 2) + # Side-by-side faceted comparison per biological sample
+  scale_y_continuous(labels = scales::comma, expand = c(0, 0), limits = c(0, NA)) +
+  scale_fill_manual(values = c(
+    "Prokaryotes" = "#2166AC", 
+    "Eukaryota" = "#F4A582", 
+    "Chloroplast" = "#66BD63", 
+    "Mitochondria" = "#9E9AC8"
+  )) +
+  coord_flip() + # Flips axes to make the plot horizontal
+  labs(x = NULL, y = "Absolute number of reads", fill = NULL) +
+  theme_classic() +
+  theme(
+    strip.background = element_rect(fill = "grey90", colour = NA),
+    strip.text = element_text(face = "bold", size = 11),
+    legend.position = "bottom",
+    legend.text = element_text(size = 12),
+    legend.key.size = unit(0.8, "cm")
+  )
+
+print(p_alluvial_combined)
