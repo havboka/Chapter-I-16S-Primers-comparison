@@ -1,0 +1,610 @@
+##########################################################################
+#                                                                        #
+#               CHapter I Primer comparison results                      #
+#                                                                        #
+##########################################################################
+
+
+####################################################### STEP III
+##################################### ALPHA and BETA DIVERSITY
+######################## 
+
+# ------------------------------------------------------------------------------
+# PHASE 1: PERCENTAGE OF UNCLASSIFIED RANKS
+# ------------------------------------------------------------------------------
+
+library(phyloseq)
+library(dplyr)
+library(tidyr)
+
+# Put your three phyloseq objects into a named list
+primers_list <- list(
+  "V3-V4 region" = V3V4.ps,
+  "V4 region"    = V4b.ps,
+  "V4-V5 region" = V4V5.ps
+)
+
+unassigned_patterns <- "^(NA|na|Unknown|unknown|Unclassified|unclassified|uncultured|Ambiguous_taxa|[a-z]__|[a-z]__|)$"
+
+# Calculate assignment percentages for each primer dataset
+rank_summary_list <- lapply(names(primers_list), function(p_name) {
+  ps <- primers_list[[p_name]]
+  tax_df <- as.data.frame(tax_table(ps))
+  
+  assignment_summary <- sapply(colnames(tax_df), function(rank) {
+    col_data <- as.character(tax_df[[rank]])
+    
+    is_unassigned <- is.na(col_data) | 
+      trimws(col_data) == "" | 
+      grepl(unassigned_patterns, trimws(col_data), ignore.case = TRUE)
+    
+    total_asvs <- length(col_data)
+    assigned_asvs <- sum(!is_unassigned)
+    if(total_asvs == 0) return(0)
+    
+    round((assigned_asvs / total_asvs) * 100, 2)
+  })
+  
+  data.frame(
+    Region = p_name,
+    Taxonomic_Rank = names(assignment_summary),
+    Percent_Assigned = assignment_summary
+  )
+})
+
+# Combine and pivot wide for a clean comparative view
+combined_rank_summary <- bind_rows(rank_summary_list)
+summary_table_wide <- combined_rank_summary %>%
+  mutate(Percent_Assigned = paste0(Percent_Assigned, "%")) %>%
+  pivot_wider(names_from = Region, values_from = Percent_Assigned)
+
+cat("\n--- TAXONOMIC ASSIGNMENT SUCCESS BY PRIMER REGION ---\n")
+print(summary_table_wide)
+
+# ------------------------------------------------------------------------------
+# PHASE 2: rarefaction plots
+# ------------------------------------------------------------------------------
+
+library(vegan)
+
+regions <- c("V3-V4 region", "V4 region", "V4-V5 region")
+region_titles <- c("V3-V4 region" = "V3-V4 Region", "V4 region" = "V4 Region", "V4-V5 region" = "V4-V5 Region")
+region_colors <- c("V3-V4 region" = "#2166AC", "V4 region" = "#66BD63", "V4-V5 region" = "#F4A582")
+
+# Set up RStudio window to show 3 panels side-by-side
+par(mfrow = c(1, 3), mar = c(5, 5, 4, 2) + 0.1)
+
+for (reg in regions) {
+  # Select appropriate phyloseq object
+  ps_obj <- switch(reg,
+                   "V3-V4 region" = V3V4.ps,
+                   "V4 region"    = V4b.ps,
+                   "V4-V5 region" = V4V5.ps)
+  
+  # Extract and clean OTU matrix
+  otu_mat <- as(otu_table(ps_obj), "matrix")
+  if (taxa_are_rows(ps_obj)) { 
+    otu_mat <- t(otu_mat) 
+  }
+  
+  # Drop empty rows/columns
+  otu_mat <- otu_mat[rowSums(otu_mat) > 0, colSums(otu_mat) > 0, drop = FALSE]
+  
+  if (nrow(otu_mat) > 0) {
+    rarecurve(
+      otu_mat, 
+      step = 20, 
+      col = region_colors[reg], 
+      lwd = 2, 
+      label = FALSE, 
+      main = region_titles[reg], 
+      ylab = "ASV Richness", 
+      xlab = "Sequencing Depth (Reads)",
+      cex.lab = 1.3, 
+      cex.axis = 1.2, 
+      cex.main = 1.4
+    )
+  }
+}
+
+# Reset plotting layout back to normal (1x1)
+par(mfrow = c(1, 1))
+
+# ------------------------------------------------------------------------------
+# PHASE 3: Good's coverage
+# ------------------------------------------------------------------------------
+
+
+calculate_goods_coverage <- function(row) {
+  N <- sum(row)          # Total reads in sample
+  n1 <- sum(row == 1)    # Number of singletons
+  if(N == 0) return(NA)
+  coverage <- 1 - (n1 / N)
+  return(coverage)
+}
+
+cat("\n--- GOOD'S COVERAGE SUMMARY BY PRIMER REGION ---\n")
+for (p_name in names(primers_list)) {
+  ps <- primers_list[[p_name]]
+  otu_mat <- as(otu_table(ps), "matrix")
+  if (taxa_are_rows(ps)) { otu_mat <- t(otu_mat) }
+  
+  goods_cov <- apply(otu_mat, 1, calculate_goods_coverage)
+  
+  cat("\nRegion:", p_name, "\n")
+  print(summary(goods_cov))
+  
+  low_cov <- names(goods_cov[goods_cov < 0.99 & !is.na(goods_cov)])
+  if (length(low_cov) > 0) {
+    cat("  Samples with < 99% coverage:", paste(low_cov, collapse = ", "), "\n")
+  } else {
+    cat("  All samples have >= 99% coverage.\n")
+  }
+}
+
+
+# ------------------------------------------------------------------------------
+# PHASE 4: rarefaction with iNEXT and alpha diversity
+# ------------------------------------------------------------------------------
+
+install.packages("iNEXT")
+
+library(phyloseq)
+library(iNEXT)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+
+#-----------------------------------------------------------
+# 1. LOAD THE THREE CLEAN PHYLOSEQ OBJECTS
+
+V3V4.ps <- readRDS("/mnt/data/home/salvatorecampanile/chapter I: primers comparison for chloroplast contamination/V3V4_no_contaminants.rds")
+V4b.ps  <- readRDS("/mnt/data/home/salvatorecampanile/chapter I: primers comparison for chloroplast contamination/V4b_no_contaminants.rds")
+V4V5.ps <- readRDS("/mnt/data/home/salvatorecampanile/chapter I: primers comparison for chloroplast contamination/V4V5_no_contaminants.rds")
+
+# 2. INSPECT AND SUMMARIZE SEQUENCING DEPTHS PER SAMPLE
+# Helper function to calculate total reads per sample
+
+
+get_sample_depths <- function(ps_obj, region_name) {
+  otu_mat <- as(otu_table(ps_obj), "matrix")
+  if (taxa_are_rows(ps_obj)) {
+    otu_mat <- t(otu_mat)
+  }
+  depths <- rowSums(otu_mat)
+  data.frame(
+    Sample_ID = names(depths),
+    Total_Reads = depths,
+    Region = region_name,
+    stringsAsFactors = FALSE
+  )
+}
+
+# Extract depths for each primer set
+depths_v3v4 <- get_sample_depths(V3V4.ps, "V3-V4 region")
+depths_v4   <- get_sample_depths(V4b.ps,  "V4 region")
+depths_v4v5 <- get_sample_depths(V4V5.ps, "V4-V5 region")
+
+# Combine into a single table
+all_depths <- bind_rows(depths_v3v4, depths_v4, depths_v4v5)
+
+# Print a summary table of sequencing depths per region
+cat("\n--- SEQUENCING DEPTH SUMMARY BY PRIMER ---\n")
+depth_summary <- all_depths %>%
+  group_by(Region) %>%
+  summarise(
+    Num_Samples  = n(),
+    Min_Reads    = min(Total_Reads),
+    Median_Reads = median(Total_Reads),
+    Mean_Reads   = round(mean(Total_Reads), 1),
+    Max_Reads    = max(Total_Reads)
+  )
+print(depth_summary)
+
+# Generate and print the depth distribution boxplot
+p_depths <- ggplot(all_depths, aes(x = Region, y = Total_Reads, fill = Region)) +
+  geom_boxplot(alpha = 0.7, outlier.shape = NA) +
+  geom_point(position = position_jitter(width = 0.1), size = 2, alpha = 0.6) +
+  scale_y_continuous(labels = scales::comma) +
+  scale_fill_manual(values = c("#2166AC", "#66BD63", "#F4A582")) +
+  labs(
+    x = NULL, 
+    y = "Total Read Count per Sample", 
+    title = "Sequencing Depth Distribution by Primer Region"
+  ) +
+  theme_classic() +
+  theme(
+    legend.position = "none", 
+    axis.text.x = element_text(face = "bold", size = 11)
+  )
+
+print(p_depths)
+
+
+
+# 3. RAREFY DATASETS TO A UNIFORM THRESHOLD
+
+min_depth <- min(all_depths$Total_Reads)
+cat("\nMinimum sequencing depth across all datasets:", min_depth, "\n")
+
+# Set target depth safely rounded down to the nearest thousand below the minimum
+target_depth <- floor(min_depth / 1000) * 1000 
+cat("Rarefying all datasets to a uniform depth of:", format(target_depth, big.mark = ","), "reads/sample\n")
+
+# Rarefy each dataset independently using the same depth
+V3V4.rare <- rarefy_even_depth(V3V4.ps, sample.size = target_depth, rngseed = 123, verbose = FALSE)
+V4b.rare  <- rarefy_even_depth(V4b.ps,  sample.size = target_depth, rngseed = 123, verbose = FALSE)
+V4V5.rare <- rarefy_even_depth(V4V5.ps, sample.size = target_depth, rngseed = 123, verbose = FALSE)
+
+
+
+# 4. EXTRACT AND PLOT ALPHA DIVERSITY METRICS
+
+get_alpha_metrics <- function(ps_obj, region_name) {
+  div <- estimate_richness(ps_obj, measures = c("Observed", "Shannon", "InvSimpson"))
+  div$Sample_ID <- rownames(div)
+  div$Region <- region_name
+  return(div)
+}
+
+alpha_combined <- bind_rows(
+  get_alpha_metrics(V3V4.rare, "V3-V4 region"),
+  get_alpha_metrics(V4b.rare,  "V4 region"),
+  get_alpha_metrics(V4V5.rare, "V4-V5 region")
+)
+
+# Reshape into long format for multi-panel plotting
+alpha_long <- alpha_combined %>%
+  pivot_longer(cols = c(Observed, Shannon, InvSimpson), names_to = "Metric", values_to = "Value") %>%
+  mutate(
+    Metric = case_when(
+      Metric == "Observed"   ~ "ASV Richness (Observed)",
+      Metric == "Shannon"    ~ "Shannon Diversity (q=1)",
+      Metric == "InvSimpson" ~ "Inverse Simpson (q=2)"
+    ),
+    Region = factor(Region, levels = c("V3-V4 region", "V4 region", "V4-V5 region"))
+  )
+
+# Generate alpha diversity comparison plot
+p_alpha <- ggplot(alpha_long, aes(x = Region, y = Value, fill = Region)) +
+  geom_boxplot(alpha = 0.7, outlier.shape = NA) +
+  geom_point(position = position_jitter(width = 0.1), size = 1.5, alpha = 0.6) +
+  facet_wrap(~ Metric, scales = "free_y") +
+  scale_fill_manual(values = c("#2166AC", "#66BD63", "#F4A582")) +
+  labs(
+    x = NULL, 
+    y = "Diversity Metric Value", 
+    title = paste0("Alpha Diversity Across Primer Regions (Rarefied at ", format(target_depth, big.mark = ","), " reads)")
+  ) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 30, hjust = 1, face = "bold"),
+    legend.position = "none",
+    strip.background = element_rect(fill = "grey90", colour = NA),
+    strip.text = element_text(face = "bold", size = 11)
+  )
+
+print(p_alpha)
+
+#---------------------------------------------------------
+# Now re generate the plot but dividing samples per type of SIPL
+
+#check sample names
+# For the V3-V4 dataset
+sample_names(V3V4.ps)
+
+# For the V4 dataset
+sample_names(V4b.ps)
+
+# For the V4-V5 dataset
+sample_names(V4V5.ps)
+
+
+# 4. EXTRACT ALPHA DIVERSITY, ASSIGN CATEGORIES, & PLOT
+
+get_alpha_metrics <- function(ps_obj, region_name) {
+  div <- estimate_richness(ps_obj, measures = c("Observed", "Shannon", "InvSimpson"))
+  div$Sample_ID <- rownames(div)
+  div$Region <- region_name
+  return(div)
+}
+
+alpha_combined <- bind_rows(
+  get_alpha_metrics(V3V4.rare, "V3-V4 region"),
+  get_alpha_metrics(V4b.rare,  "V4 region"),
+  get_alpha_metrics(V4V5.rare, "V4-V5 region")
+)
+
+alpha_long <- alpha_combined %>%
+  pivot_longer(cols = c(Observed, Shannon, InvSimpson), names_to = "Metric", values_to = "Value") %>%
+  mutate(
+    SIPL_Category = case_when(
+      grepl("^C03L2|^C04L2", Sample_ID) ~ "Mature SIPL",
+      grepl("^C12L2|^C13L2", Sample_ID) ~ "Young SIPL",
+      TRUE ~ "Unknown"
+    ),
+    Metric = case_when(
+      Metric == "Observed"   ~ "ASV Richness (Observed)",
+      Metric == "Shannon"    ~ "Shannon Diversity (q=1)",
+      Metric == "InvSimpson" ~ "Inverse Simpson (q=2)"
+    ),
+    Region = factor(Region, levels = c("V3-V4 region", "V4 region", "V4-V5 region")),
+    SIPL_Category = factor(SIPL_Category, levels = c("Mature SIPL", "Young SIPL"))
+  )
+
+
+# 6. GENERATE FINAL PLOT
+
+p_alpha_SIPL_type <- ggplot(alpha_long, aes(x = Region, y = Value, fill = SIPL_Category)) +
+  # Thin vertical dashed separator lines between primer regions
+  geom_vline(xintercept = c(1.5, 2.5), color = "grey80", linetype = "dashed", linewidth = 0.5) +
+  geom_boxplot(alpha = 0.7, outlier.shape = NA, position = position_dodge(0.8)) +
+  geom_point(position = position_jitterdodge(jitter.width = 0.1, dodge.width = 0.8), size = 1.5, alpha = 0.6) +
+  
+  facet_wrap(~ Metric, scales = "free_y", nrow = 1) +
+  scale_fill_manual(values = c("Mature SIPL" = "#E78ECD", "Young SIPL" = "#00C0C0")) +
+  labs(
+    x = NULL, 
+    y = "Diversity Metric Value", 
+    fill = "Sample Group",
+    title = paste0("Alpha Diversity by Primer & SIPL Category (Rarefied at ", format(target_depth, big.mark = ","), " reads)")
+  ) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 30, hjust = 1, face = "bold"),
+    legend.position = "bottom",
+    strip.background = element_rect(fill = "grey90", colour = NA),
+    strip.text = element_text(face = "bold", size = 11)
+  )
+  
+
+print(p_alpha_SIPL_type)
+
+
+# ------------------------------------------------------------------------------
+# PHASE 5: beta diversity and bray curtis dissimilarities
+# ------------------------------------------------------------------------------
+
+
+# Helper function to process PCoA data for a given phyloseq object
+get_pcoa_df <- function(ps_obj, region_name) {
+  # Calculate Bray-Curtis distance and run PCoA
+  ord <- ordinate(ps_obj, method = "PCoA", distance = "bray")
+  
+  # Extract coordinates
+  coords <- data.frame(ord$vectors[, 1:2])
+  colnames(coords) <- c("PCoA1", "PCoA2")
+  coords$Sample_ID <- rownames(coords)
+  coords$Region <- region_name
+  
+  # Extract percentage variance explained
+  eig <- ord$values$Eigenvalues
+  pct <- round(eig / sum(eig) * 100, 1)
+  coords$PC1_pct <- pct[1]
+  coords$PC2_pct <- pct[2]
+  
+  # Assign Mature vs Young SIPL categories
+  coords <- coords %>%
+    mutate(
+      SIPL_Category = case_when(
+        grepl("^C03L2|^C04L2", Sample_ID) ~ "Mature SIPL",
+        grepl("^C12L2|^C13L2", Sample_ID) ~ "Young SIPL",
+        TRUE ~ "Unknown"
+      )
+    )
+  return(coords)
+}
+
+# Combine PCoA coordinates from all three regions
+pcoa_combined <- bind_rows(
+  get_pcoa_df(V3V4.rare, "V3-V4 Region"),
+  get_pcoa_df(V4b.rare,  "V4 Region"),
+  get_pcoa_df(V4V5.rare, "V4-V5 Region")
+)
+
+pcoa_combined$Region <- factor(pcoa_combined$Region, levels = c("V3-V4 Region", "V4 Region", "V4-V5 Region"))
+
+# PLOT MULTI-PANEL PCOA
+
+p_pcoa_combined_primers <- ggplot(pcoa_combined, aes(x = PCoA1, y = PCoA2, color = SIPL_Category)) +
+  geom_point(size = 3, alpha = 0.8) +
+  stat_ellipse(level = 0.95, linetype = 2) + # Optional confidence ellipses
+  facet_wrap(~ Region, scales = "free") +
+  scale_color_manual(values = c("Mature SIPL" = "#E78ECD", "Young SIPL" = "#00C0C0")) +
+  labs(
+    x = "PCoA Axis 1",
+    y = "PCoA Axis 2",
+    color = "Sample Group",
+    title = "Bray-Curtis PCoA Ordination Across Primer Regions"
+  ) +
+  theme_classic() +
+  theme(
+    legend.position = "bottom",
+    strip.background = element_rect(fill = "grey90", colour = NA),
+    strip.text = element_text(face = "bold", size = 11)
+  )
+
+print(p_pcoa_combined_primers)
+
+
+########################## combined pcoa plot
+
+# Helper function to extract genus-level count matrices with unique sample names
+get_genus_df <- function(ps_obj, region_label) {
+  # Agglomerate to Genus level
+  ps_g <- tax_glom(ps_obj, taxrank = "Genus", NArm = FALSE)
+  mat <- as(otu_table(ps_g), "matrix")
+  if (taxa_are_rows(ps_g)) { mat <- t(mat) }
+  
+  # Extract genus names
+  tax <- as(tax_table(ps_g), "matrix")
+  genus_names <- tax[, "Genus"]
+  genus_names[is.na(genus_names) | genus_names == ""] <- paste0("Unassigned_", rownames(tax)[is.na(genus_names) | genus_names == ""])
+  colnames(mat) <- genus_names
+  
+  # Format data frame (rows = samples, columns = genera)
+  df <- as.data.frame(mat)
+  rownames(df) <- paste0(rownames(df), "_", region_label)
+  return(df)
+}
+
+df_v3v4 <- get_genus_df(V3V4.ps, "V3V4")
+df_v4   <- get_genus_df(V4b.ps, "V4")
+df_v4v5 <- get_genus_df(V4V5.ps, "V4V5")
+
+# Combine all sample matrices into one table, filling unshared genera with 0
+combined_genus <- bind_rows(
+  df_v3v4 %>% mutate(Sample_ID = rownames(df_v3v4)),
+  df_v4   %>% mutate(Sample_ID = rownames(df_v4)),
+  df_v4v5 %>% mutate(Sample_ID = rownames(df_v4v5))
+) %>%
+  replace(is.na(.), 0)
+
+rownames(combined_genus) <- combined_genus$Sample_ID
+sample_mat <- as.matrix(combined_genus %>% select(-Sample_ID))
+
+
+# 3. CALCULATE BRAY-CURTIS DISTANCES & RUN PCOA
+
+bc_dist <- vegdist(sample_mat, method = "bray")
+
+pcoa_res <- cmdscale(bc_dist, k = 2, eig = TRUE)
+coords <- data.frame(pcoa_res$points)
+colnames(coords) <- c("PCoA1", "PCoA2")
+coords$Sample_Full_ID <- rownames(coords)
+
+# Calculate percentage variance explained by axes
+eig <- pcoa_res$eig
+pct <- round(eig / sum(eig) * 100, 1)
+
+
+# 4. ANNOTATE METADATA & GENERATE PLOT
+ 
+coords <- coords %>%
+  mutate(
+    Region = case_when(
+      grepl("_V3V4$", Sample_Full_ID) ~ "V3-V4 Region",
+      grepl("_V4$", Sample_Full_ID)    ~ "V4 Region",
+      grepl("_V4V5$", Sample_Full_ID)   ~ "V4-V5 Region"
+    ),
+    SIPL_Category = case_when(
+      grepl("^C03L2|^C04L2", Sample_Full_ID) ~ "Mature SIPL",
+      grepl("^C12L2|^C13L2", Sample_Full_ID) ~ "Young SIPL",
+      TRUE ~ "Unknown"
+    ),
+    Region = factor(Region, levels = c("V3-V4 Region", "V4 Region", "V4-V5 Region")),
+    SIPL_Category = factor(SIPL_Category, levels = c("Mature SIPL", "Young SIPL"))
+  )
+
+p_combined_genus <- ggplot(coords, aes(x = PCoA1, y = PCoA2, color = Region, shape = SIPL_Category)) +
+  geom_point(size = 3.5, alpha = 0.9) +
+  stat_ellipse(aes(group = Region), level = 0.95, linetype = 2, linewidth = 0.6) + # Optional regional clustering ellipses
+  scale_color_manual(values = c("V3-V4 Region" = "#2166AC", "V4 Region" = "#66BD63", "V4-V5 Region" = "#F4A582")) +
+  scale_shape_manual(values = c("Mature SIPL" = 16, "Young SIPL" = 17)) + # Circle = Mature, Triangle = Young
+  labs(
+    x = paste0("PCoA Axis 1 (", pct[1], "%)"),
+    y = paste0("PCoA Axis 2 (", pct[2], "%)"),
+    color = "Primer Region",
+    shape = "Sample Type",
+    title = "Combined Bray-Curtis PCoA Across All Primer Regions (Genus Level)"
+  ) +
+  theme_classic() +
+  theme(
+    legend.position = "right",
+    axis.text = element_text(size = 11),
+    axis.title = element_text(face = "bold", size = 12),
+    plot.title = element_text(face = "bold", size = 13, hjust = 0.5)
+  )
+
+print(p_combined_genus)
+
+# 2. AGGLOMERATE TO CLASS LEVEL & UNIFY INTO A SINGLE MATRIX
+
+get_class_df <- function(ps_obj, region_label) {
+  # Agglomerate to Class level
+  ps_c <- tax_glom(ps_obj, taxrank = "Class", NArm = FALSE)
+  mat <- as(otu_table(ps_c), "matrix")
+  if (taxa_are_rows(ps_c)) { mat <- t(mat) }
+  
+  # Extract class names
+  tax <- as(tax_table(ps_c), "matrix")
+  class_names <- tax[, "Class"]
+  class_names[is.na(class_names) | class_names == ""] <- paste0("Unassigned_", rownames(tax)[is.na(class_names) | class_names == ""])
+  colnames(mat) <- class_names
+  
+  # Format data frame (rows = samples, columns = classes)
+  df <- as.data.frame(mat)
+  rownames(df) <- paste0(rownames(df), "_", region_label)
+  return(df)
+}
+
+df_v3v4 <- get_class_df(V3V4.ps, "V3V4")
+df_v4   <- get_class_df(V4b.ps, "V4")
+df_v4v5 <- get_class_df(V4V5.ps, "V4V5")
+
+# Combine all sample matrices into one table, filling unshared classes with 0
+combined_class <- bind_rows(
+  df_v3v4 %>% mutate(Sample_ID = rownames(df_v3v4)),
+  df_v4   %>% mutate(Sample_ID = rownames(df_v4)),
+  df_v4v5 %>% mutate(Sample_ID = rownames(df_v4v5))
+) %>%
+  replace(is.na(.), 0)
+
+rownames(combined_class) <- combined_class$Sample_ID
+sample_mat <- as.matrix(combined_class %>% select(-Sample_ID))
+
+# 3. CALCULATE BRAY-CURTIS DISTANCES & RUN PCOA
+
+bc_dist <- vegdist(sample_mat, method = "bray")
+
+pcoa_res <- cmdscale(bc_dist, k = 2, eig = TRUE)
+coords <- data.frame(pcoa_res$points)
+colnames(coords) <- c("PCoA1", "PCoA2")
+coords$Sample_Full_ID <- rownames(coords)
+
+# Calculate percentage variance explained by axes
+eig <- pcoa_res$eig
+pct <- round(eig / sum(eig) * 100, 1)
+
+# ==============================================================================
+# 4. ANNOTATE METADATA & GENERATE PLOT
+# ==============================================================================
+coords <- coords %>%
+  mutate(
+    Region = case_when(
+      grepl("_V3V4$", Sample_Full_ID) ~ "V3-V4 Region",
+      grepl("_V4$", Sample_Full_ID)    ~ "V4 Region",
+      grepl("_V4V5$", Sample_Full_ID)   ~ "V4-V5 Region"
+    ),
+    SIPL_Category = case_when(
+      grepl("^C03L2|^C04L2", Sample_Full_ID) ~ "Mature SIPL",
+      grepl("^C12L2|^C13L2", Sample_Full_ID) ~ "Young SIPL",
+      TRUE ~ "Unknown"
+    ),
+    Region = factor(Region, levels = c("V3-V4 Region", "V4 Region", "V4-V5 Region")),
+    SIPL_Category = factor(SIPL_Category, levels = c("Mature SIPL", "Young SIPL"))
+  )
+
+p_combined_class <- ggplot(coords, aes(x = PCoA1, y = PCoA2)) +
+  geom_point(aes(color = Region, shape = SIPL_Category), size = 3.5, alpha = 0.9) +
+  stat_ellipse(aes(color = Region, group = Region), level = 0.95, linetype = 2, linewidth = 0.6) + 
+  scale_color_manual(values = c("V3-V4 Region" = "#2166AC", "V4 Region" = "#66BD63", "V4-V5 Region" = "#F4A582")) +
+  scale_shape_manual(values = c("Mature SIPL" = 16, "Young SIPL" = 17)) +
+  labs(
+    x = paste0("PCoA Axis 1 (", pct[1], "%)"),
+    y = paste0("PCoA Axis 2 (", pct[2], "%)"),
+    color = "Primer Region",
+    shape = "Sample Type",
+    title = "Combined Bray-Curtis PCoA Across All Primer Regions (Class Level)"
+  ) +
+  theme_classic() +
+  theme(
+    legend.position = "right",
+    axis.text = element_text(size = 11),
+    axis.title = element_text(face = "bold", size = 12),
+    plot.title = element_text(face = "bold", size = 13, hjust = 0.5)
+  )
+
+print(p_combined_class)
+
