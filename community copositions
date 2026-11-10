@@ -1,0 +1,256 @@
+##########################################################################
+#                                                                        #
+#               CHapter I Primer comparison results                      #
+#                                                                        #
+##########################################################################
+
+
+####################################################### STEP IV
+##################################### community composition
+######################## 
+
+
+library(phyloseq)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(RColorBrewer)
+
+# ==============================================================================
+# 1. LOAD THE THREE CLEAN PHYLOSEQ OBJECTS
+# ==============================================================================
+
+V3V4.ps <- readRDS("/mnt/data/home/salvatorecampanile/chapter I: primers comparison for chloroplast contamination/V3V4_no_contaminants.rds")
+V4b.ps  <- readRDS("/mnt/data/home/salvatorecampanile/chapter I: primers comparison for chloroplast contamination/V4b_no_contaminants.rds")
+V4V5.ps <- readRDS("/mnt/data/home/salvatorecampanile/chapter I: primers comparison for chloroplast contamination/V4V5_no_contaminants.rds")
+
+# ==============================================================================
+# 2. HELPER FUNCTION TO PREPARE RELATIVE ABUNDANCE DATA (WITH CLEANED LABELS)
+# ==============================================================================
+prep_composition_data <- function(ps_obj, region_name, tax_rank = "Class", top_n = 12) {
+  # Convert counts to relative abundance (percentages)
+  ps_rel <- transform_sample_counts(ps_obj, function(x) x / sum(x))
+  
+  # Melt phyloseq object into a long data frame
+  df <- psmelt(ps_rel)
+  
+  # Remove the '-LJD...' suffix from sample names
+  df$Sample <- sub("-LJD.*$", "", df$Sample)
+  
+  # Clean up unassigned or NA taxonomic names
+  df[[tax_rank]] <- as.character(df[[tax_rank]])
+  df[[tax_rank]][is.na(df[[tax_rank]]) | df[[tax_rank]] == ""] <- "Unassigned"
+  
+  # Identify top N most abundant taxa overall to group the rest into "Other"
+  top_taxa <- df %>%
+    group_by(.data[[tax_rank]]) %>%
+    summarise(Mean_Abund = mean(Abundance), .groups = "drop") %>%
+    arrange(desc(Mean_Abund)) %>%
+    slice_head(n = top_n) %>%
+    pull(1)
+  
+  df <- df %>%
+    mutate(
+      Taxon_Group = ifelse(.data[[tax_rank]] %in% top_taxa, .data[[tax_rank]], "Other"),
+      Region = region_name,
+      SIPL_Category = case_when(
+        grepl("^C03L2|^C04L2", Sample) ~ "Mature SIPL",
+        grepl("^C12L2|^C13L2", Sample) ~ "Young SIPL",
+        TRUE ~ "Unknown"
+      )
+    )
+  
+  return(df)
+}
+
+# Set taxonomic rank (currently Class level)
+tax_level_to_plot <- "Class"
+
+combined_comp <- bind_rows(
+  prep_composition_data(V3V4.ps, "V3-V4 Region", tax_rank = tax_level_to_plot, top_n = 12),
+  prep_composition_data(V4b.ps,  "V4 Region",    tax_rank = tax_level_to_plot, top_n = 12),
+  prep_composition_data(V4V5.ps, "V4-V5 Region", tax_rank = tax_level_to_plot, top_n = 12)
+)
+
+combined_comp$Region <- factor(combined_comp$Region, levels = c("V3-V4 Region", "V4 Region", "V4-V5 Region"))
+combined_comp$SIPL_Category <- factor(combined_comp$SIPL_Category, levels = c("Mature SIPL", "Young SIPL"))
+
+
+# ==============================================================================
+# 3. GENERATE HORIZONTAL CLASS-LEVEL BARPLOT WITH CLEANED LABELS
+# ==============================================================================
+unique_taxa <- unique(combined_comp$Taxon_Group)
+
+vibrant_palette <- c(
+  "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", 
+  "#8c564b", "#e377c2", "#bcbd22", "#17becf", "#aec7e8", 
+  "#ffbb78", "#98df8a", "#ff9896", "#c5b0d5", "#c49c94", "#f7b6d2"
+)
+
+named_colors <- setNames(rep(vibrant_palette, length.out = length(unique_taxa)), unique_taxa)
+if("Other" %in% names(named_colors)) named_colors["Other"] <- "#7f7f7f"         
+if("Unassigned" %in% names(named_colors)) named_colors["Unassigned"] <- "#b2b2b2" 
+
+p_comp <- ggplot(combined_comp, aes(x = Abundance, y = Sample, fill = Taxon_Group)) +
+  geom_bar(stat = "identity", position = "stack", width = 0.8) +
+  facet_grid(Region ~ SIPL_Category, scales = "free_y", space = "free_y") +
+  scale_fill_manual(values = named_colors) +
+  guides(fill = guide_legend(nrow = 3)) +
+  labs(
+    x = "Relative Abundance",
+    y = NULL,
+    fill = tax_level_to_plot,
+    title = paste0("Taxonomic Composition by Primer Region and SIPL Category (", tax_level_to_plot, " Level)")
+  ) +
+  theme_classic() +
+  theme(
+    axis.text.y = element_text(size = 8, face = "bold"),
+    legend.position = "bottom",
+    legend.text = element_text(size = 9),
+    legend.title = element_text(face = "bold", size = 10),
+    strip.background = element_rect(fill = "grey90", colour = NA),
+    strip.text = element_text(face = "bold", size = 10),
+    panel.grid.major.y = element_blank()
+  )
+
+print(p_comp)
+
+
+
+
+####################################################### STEP V
+##################################### differential abundance and taxonomic overlap
+######################## 
+
+install.packages("UpSetR")
+library(UpSetR)
+
+# 1. Extract detected orders (presence/absence) for each primer set
+get_presence_orders <- function(ps_obj) {
+  ps_g <- tax_glom(ps_obj, taxrank = "Order", NArm = TRUE)
+  tax_tab <- tax_table(ps_g)
+  orders <- unique(tax_tab[, "Order"])
+  orders <- orders[orders != "" & !is.na(orders)]
+  return(orders)
+}
+
+orders_v3v4 <- get_presence_orders(V3V4.ps)
+orders_v4   <- get_presence_orders(V4b.ps)
+orders_v4v5 <- get_presence_orders(V4V5.ps)
+
+# 2. Create a binary presence/absence data frame for UpSetR
+all_orders <- unique(c(orders_v3v4, orders_v4, orders_v4v5))
+
+upset_df <- data.frame(
+  Order = all_orders,
+  V3_V4 = as.integer(all_orders %in% orders_v3v4),
+  V4    = as.integer(all_orders %in% orders_v4),
+  V4_V5 = as.integer(all_orders %in% orders_v4v5)
+)
+
+# 3. Generate UpSet Plot 
+png("Primer_Taxonomic_Overlap_UpSet.png", width = 800, height = 500, res = 150)
+upset(
+  upset_df, 
+  sets = c("V3_V4", "V4", "V4_V5"),
+  sets.bar.color = c("#2166AC", "#66BD63", "#F4A582"),
+  order.by = "freq", 
+  empty.intersections = "on"
+)
+dev.off()
+
+cat("\nUpSet plot saved successfully as 'Primer_Taxonomic_Overlap_UpSet.png'\n")
+
+upset(
+  upset_df, 
+  sets = c("V3_V4", "V4", "V4_V5"),
+  sets.bar.color = c("#2166AC", "#66BD63", "#F4A582"),
+  order.by = "freq", 
+  empty.intersections = "on"
+) #to visualize it
+
+
+####################################################### 
+
+library(phyloseq)
+library(DESeq2)
+library(dplyr)
+
+# 1. Prepare data: Agglomerate to Family level (great for spotting chloroplast/mitochondrial bias)
+tax_rank_target <- "Family" # Change to "Genus" if preferred
+
+ps_v3v4_f <- tax_glom(V3V4.ps, tax_rank_target)
+ps_v4_f   <- tax_glom(V4b.ps,  tax_rank_target)
+ps_v4v5_f <- tax_glom(V4V5.ps, tax_rank_target)
+
+# Add a Region metadata tag to each
+sample_data(ps_v3v4_f)$Primer_Region <- "V3-V4"
+sample_data(ps_v4_f)$Primer_Region   <- "V4"
+sample_data(ps_v4v5_f)$Primer_Region  <- "V4-V5"
+
+# 2. Merge into a single multi-primer phyloseq object at the chosen taxonomic rank
+# (Note: we match taxa by taxonomic name string to combine counts across primers)
+# Alternatively, run pairwise DESeq2 models between primers. 
+# Here is the robust pairwise approach (e.g., V3-V4 vs V4):
+
+
+# 1. Redefine the helper function to safely assign and lock factor levels internally
+run_deseq_primer_comparison <- function(ps1, ps2, name1, name2) {
+  # Explicitly assign metadata labels to each phyloseq object
+  sample_data(ps1)$Primer_Region <- name1
+  sample_data(ps2)$Primer_Region <- name2
+  
+  # Merge objects and remove zero-sum taxa
+  merged_ps <- merge_phyloseq(ps1, ps2)
+  merged_ps <- prune_taxa(taxa_sums(merged_ps) > 0, merged_ps)
+  
+  # Force Primer_Region to be a factor with name1 explicitly set as the first level (reference)
+  sample_data(merged_ps)$Primer_Region <- factor(
+    as.character(sample_data(merged_ps)$Primer_Region), 
+    levels = c(name1, name2)
+  )
+  
+  # Convert to DESeq2 dataset
+  diag_dds <- phyloseq_to_deseq2(merged_ps, ~ Primer_Region)
+  
+  # Run DESeq with zero-inflation safety (poscounts)
+  diag_dds <- DESeq(diag_dds, test = "Wald", fitType = "parametric", sfType = "poscounts")
+  
+  # Extract results
+  res <- results(diag_dds, cooksCutoff = FALSE)
+  res_df <- as.data.frame(res)
+  res_df$Taxon_Name <- tax_table(merged_ps)[rownames(res_df), tax_rank_target]
+  res_df$Comparison <- paste0(name2, "_vs_", name1)
+  res_df$Taxon_ID <- rownames(res_df)
+  
+  return(res_df)
+}
+
+# 3. Run all three pairwise comparisons
+cat("Running Comparison 1: V4 vs V3_V4...\n")
+res_v4_vs_v3v4 <- run_deseq_primer_comparison(ps_v3v4_f, ps_v4_f, "V3_V4", "V4")
+
+cat("Running Comparison 2: V4_V5 vs V4...\n")
+res_v4v5_vs_v4 <- run_deseq_primer_comparison(ps_v4_f, ps_v4v5_f, "V4", "V4_V5")
+
+cat("Running Comparison 3: V4_V5 vs V3_V4...\n")
+res_v4v5_vs_v3v4 <- run_deseq_primer_comparison(ps_v3v4_f, ps_v4v5_f, "V3_V4", "V4_V5")
+
+# 4. Combine everything into a single master results table
+all_comparisons <- bind_rows(res_v4_vs_v3v4, res_v4v5_vs_v4, res_v4v5_vs_v3v4)
+
+# 5. Filter for significantly enriched/depleted taxa (padj < 0.05)
+sig_results <- all_comparisons %>% 
+  filter(padj < 0.05) %>% 
+  arrange(Comparison, desc(log2FoldChange))
+
+cat("\n--- Top Significant Differential Taxa Across All Comparisons ---\n")
+print(head(sig_results, 15))
+
+# 6. Save master table for your thesis chapter
+write.csv(all_comparisons, "DESeq2_All_Primer_Pairwise_Comparisons.csv", row.names = FALSE)
+write.csv(sig_results, "DESeq2_Significant_Taxa_Only.csv", row.names = FALSE)
+
+
+
+
